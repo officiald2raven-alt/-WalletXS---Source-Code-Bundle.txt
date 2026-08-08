@@ -1,6 +1,6 @@
-# WalletXS — GitHub Source Bundle (Part 2 of 2)
+# WalletXS — GitHub Source Bundle (Part 2 of 3)
 
-Components, pages, and dependencies. See **WalletXS-Source-Part1.md** for config / build files / public assets / hooks / lib.
+Components. See **WalletXS-Source-Part1.md** for config / build files / public assets / hooks / lib, and **WalletXS-Source-Part3.md** for pages + dependencies.
 
 ---
 
@@ -8,13 +8,13 @@ Components, pages, and dependencies. See **WalletXS-Source-Part1.md** for config
 
 ```jsx
 import React from 'react';
-import { Shield, KeyRound, Github } from 'lucide-react';
+import { Shield, KeyRound, Github, Wallet } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import InstallButton from '@/components/walletxs/InstallButton';
 import ScoreAlertsToggle from '@/components/walletxs/ScoreAlertsToggle';
 import { GITHUB_REPO_URL } from '@/lib/config';
 
-export default function Header({ address, apiKey, onKeyChange }) {
+export default function Header({ address, apiKey, onKeyChange, onShowWallets }) {
   return (
     <header className="flex flex-wrap items-center justify-between gap-3 py-6">
       <div className="flex items-center gap-2">
@@ -22,6 +22,18 @@ export default function Header({ address, apiKey, onKeyChange }) {
         <span className="text-lg font-semibold tracking-tight text-neutral-900">WalletXS</span>
       </div>
       <div className="flex items-center gap-2 sm:gap-3">
+        {address && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onShowWallets}
+            title="View and manage your tracked wallets"
+            className="h-8 text-xs border-neutral-200 bg-white hover:bg-neutral-50"
+          >
+            <Wallet className="w-3.5 h-3.5" strokeWidth={1.75} />
+            <span className="hidden sm:inline">My wallets</span>
+          </Button>
+        )}
         <a
           href={GITHUB_REPO_URL}
           target="_blank"
@@ -505,7 +517,7 @@ export default function WhatChanged({ findings }) {
 import React from 'react';
 import { Link } from 'react-router-dom';
 import { ChevronRight } from 'lucide-react';
-import { percentileFor, SAMPLE_SIZE } from '@/lib/percentile';
+import { percentileFor, SAMPLE_SIZE, SAMPLE_UPDATED } from '@/lib/percentile';
 
 export default function PercentileLine({ score }) {
   const pct = percentileFor(score);
@@ -521,7 +533,8 @@ export default function PercentileLine({ score }) {
         <ChevronRight className="ml-0.5 w-4 h-4" strokeWidth={1.75} />
       </Link>
       <p className="mt-1 text-xs text-neutral-400">
-        Based on a sample of {SAMPLE_SIZE.toLocaleString()} public wallets, updated periodically
+        Based on a sample of {SAMPLE_SIZE.toLocaleString()} public wallets, refreshed monthly
+        (last: {new Date(SAMPLE_UPDATED).toLocaleDateString(undefined, { month: 'short', year: 'numeric' })})
       </p>
     </div>
   );
@@ -1186,374 +1199,295 @@ export default function TipJar() {
 }
 ```
 
-## src/pages/Home.jsx
+## src/components/walletxs/WalletList.jsx
 
 ```jsx
-import React, { useCallback, useEffect, useState } from 'react';
-import Header from '@/components/walletxs/Header';
+import React, { useRef, useState } from 'react';
+import { Trash2, Eye, Download, Upload } from 'lucide-react';
 import AddressEntry from '@/components/walletxs/AddressEntry';
-import ApiKeyEntry from '@/components/walletxs/ApiKeyEntry';
-import ScoreCard from '@/components/walletxs/ScoreCard';
-import SubScoreGrid from '@/components/walletxs/SubScoreGrid';
-import WhatChanged from '@/components/walletxs/WhatChanged';
-import PercentileLine from '@/components/walletxs/PercentileLine';
-import ScoreHistory from '@/components/walletxs/ScoreHistory';
-import { computeScore, counterfactualGain } from '@/lib/scoring';
-import { collectWalletData, lookupPublicExposure } from '@/lib/chain';
-import {
-  loadAddress,
-  saveAddress,
-  clearAddress,
-  lastCheckFor,
-  recordCheck,
-  historyFor,
-  loadApiKey,
-  saveApiKey,
-  clearApiKey,
-} from '@/lib/storage';
-import { notifyScoreChange } from '@/lib/notify';
-import { shortAddr } from '@/lib/severity';
-import { useLiveMetrics } from '@/hooks/useLiveMetrics';
-import { useScheduledCheck } from '@/hooks/useScheduledCheck';
-import LiveMetricsBanner from '@/components/walletxs/LiveMetricsBanner';
-import TipJar from '@/components/walletxs/TipJar';
+import { lastCheckFor } from '@/lib/storage';
+import { exportBackup, importBackup } from '@/lib/backup';
+import { tier, shortAddr } from '@/lib/severity';
 
-export default function Home() {
-  const [address, setAddress] = useState(() => loadAddress());
-  const [apiKey, setApiKey] = useState(() => loadApiKey());
-  const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState(null);
-  const [lastCheck, setLastCheck] = useState(null);
-  const [findings, setFindings] = useState([]);
-  const [limitedDepth, setLimitedDepth] = useState(false);
-  const [scoreHistory, setScoreHistory] = useState([]);
-  const { totalAudits, available, increment: incrementMetrics } = useLiveMetrics();
+function timeAgo(at) {
+  const days = Math.max(0, Math.round((Date.now() - at) / 86400000));
+  if (days === 0) return 'checked today';
+  if (days === 1) return 'checked 1 day ago';
+  return `checked ${days} days ago`;
+}
 
-  const run = useCallback(
-    async (addr, key) => {
-      setLoading(true);
-      setResult(null);
-      const previous = lastCheckFor(addr);
-      setLastCheck(previous);
+// The address-book screen. Shows each tracked wallet with its cached
+// last-known score (NO auto-scan of every wallet — only the one the user
+// selects to view gets a fresh scan, handled by the parent). Adding a new
+// wallet reuses AddressEntry's validation + connect flow. Export/import
+// backs the tracked list up to / restores from a JSON file.
+const VISIBLE_CAP = 6;
 
-      const data = await collectWalletData(addr, key);
-      setLimitedDepth(!!data.limitedDepth);
-      const osintMatches = await lookupPublicExposure(addr);
-      const inputs = { ...data, osintMatches, now: Date.now() };
-      const scored = computeScore(inputs);
+export default function WalletList({ tracked, onSelect, onRemove, onAdd, onImported }) {
+  const fileRef = useRef(null);
+  const [importMsg, setImportMsg] = useState(null); // { type, text }
+  const [showAll, setShowAll] = useState(false);
 
-      // Current risky-approval findings for this check.
-      const currentFindings = (data.approvals || [])
-        .filter((a) => a.flagged || a.unlimited)
-        .map((a) => ({
-          id: a.key,
-          owner: addr,
-          spender: a.spender,
-          gain: counterfactualGain(inputs, a.key),
-          text: a.flagged
-            ? `Contract ${a.spender} is on a phishing blocklist. You have ${
-                a.unlimited ? 'an unlimited' : 'an active'
-              } approval to it.`
-            : `You have an unlimited approval to ${a.spender}, which can move that token from your wallet at any time.`,
-        }));
+  // Sort worst-score-first (ascending). Wallets with no previous check
+  // (lastCheckFor returns null) sort to the end — an unknown status isn't
+  // more urgent than a confirmed low score.
+  const sorted = [...tracked].sort((a, b) => {
+    const sa = lastCheckFor(a.address);
+    const sb = lastCheckFor(b.address);
+    if (!sa && !sb) return 0;
+    if (!sa) return 1;
+    if (!sb) return -1;
+    return sa.score - sb.score;
+  });
 
-      // Real diff: only findings whose approval key was NOT present last check.
-      const prevKeys = new Set((previous?.findings || []).map((f) => f.id));
-      const newFindings = currentFindings.filter((f) => !prevKeys.has(f.id));
+  const visible = showAll ? sorted : sorted.slice(0, VISIBLE_CAP);
+  const hiddenCount = sorted.length - VISIBLE_CAP;
 
-      const dropped = previous && scored.overall !== null && scored.overall < previous.score;
-      if (dropped) {
-        if (newFindings.length > 0) {
-          setFindings(newFindings);
-        } else {
-          // Score dropped with no new approvals → it's approval aging, not a new risk.
-          setFindings([
-            {
-              id: '__aging__',
-              text: 'Your score dropped due to approval aging — no new risky approvals since your last check.',
-            },
-          ]);
-        }
-      } else {
-        setFindings([]);
-      }
-
-      setResult(scored);
-      recordCheck(addr, scored.overall, currentFindings);
-      setScoreHistory(historyFor(addr, 10));
-      // Anonymous, stateless audit ping — fires only on a completed scan (a
-      // real score was produced), never on a failed/empty scan or on page load.
-      if (scored.overall !== null) incrementMetrics();
-      // Stateless browser alert: notify only on a real score change vs the
-      // prior check, and only while the tab is in the background (no noise
-      // when the user is already looking at the score).
-      if (previous && scored.overall !== null && scored.overall !== previous.score) {
-        notifyScoreChange(addr, previous.score, scored.overall);
-      }
-      setLoading(false);
-    },
-    [incrementMetrics]
-  );
-
-  useScheduledCheck(address, apiKey, run);
-
-  useEffect(() => {
-    if (address) run(address, apiKey);
-  }, [address, apiKey, run]);
-
-  const onSubmit = (addr) => {
-    saveAddress(addr);
-    setAddress(addr);
-  };
-
-  const onChange = () => {
-    clearAddress();
-    setAddress(null);
-    setResult(null);
-    setFindings([]);
-    setLimitedDepth(false);
-    setScoreHistory([]);
-  };
-
-  const onKeySaved = (key) => {
-    saveApiKey(key);
-    setApiKey(key);
-  };
-
-  const onKeyChange = () => {
-    clearApiKey();
-    setApiKey(null);
-    setResult(null);
-    setFindings([]);
+  const handleImport = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // allow re-importing the same file later
+    if (!file) return;
+    try {
+      const { added, duplicate, invalid } = await importBackup(file);
+      const parts = [`Imported ${added} wallet${added === 1 ? '' : 's'}`];
+      if (duplicate) parts.push(`${duplicate} already tracked`);
+      if (invalid) parts.push(`${invalid} skipped`);
+      setImportMsg({ type: 'ok', text: parts.join(' · ') });
+      onImported && onImported();
+    } catch (err) {
+      setImportMsg({ type: 'error', text: err.message || 'Import failed.' });
+    }
+    setTimeout(() => setImportMsg(null), 5000);
   };
 
   return (
-    <div className="min-h-screen bg-[#fafafa] text-neutral-900">
-      <div className="mx-auto max-w-2xl px-5 pb-24">
-        <Header address={address} apiKey={apiKey} onKeyChange={onKeyChange} />
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-xl font-semibold tracking-tight text-neutral-900">Your wallets</h1>
+        <p className="mt-1.5 text-sm text-neutral-500">
+          Select a wallet to run a fresh check, or add another below.
+        </p>
+      </div>
 
-        <div className="mt-2 mb-6">
-          <LiveMetricsBanner
-            totalAudits={totalAudits}
-            available={available}
-          />
-        </div>
-
-        {address && (
-          <div className="mb-4 flex items-center justify-between">
-            <span className="font-mono text-xs text-neutral-500">{shortAddr(address)}</span>
+      {tracked.length > 0 && (
+        <>
+          <ul className="space-y-2">
+            {visible.map((w) => {
+              const last = lastCheckFor(w.address);
+              const t = tier(last ? last.score : null);
+              return (
+                <li
+                  key={w.address}
+                  className="flex items-center justify-between rounded-xl border border-[#e5e5e7] bg-[#f5f5f6] px-4 py-3"
+                >
+                  <div className="flex min-w-0 items-center gap-3">
+                    <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${last ? t.dot : 'bg-neutral-300'}`} />
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-sm text-neutral-900">{shortAddr(w.address)}</span>
+                        {w.label && (
+                          <span className="truncate text-xs text-neutral-500">{w.label}</span>
+                        )}
+                      </div>
+                      <div className="text-xs text-neutral-500">
+                        {last
+                          ? `${last.score} · ${t.label} · ${timeAgo(last.at)}`
+                          : 'not yet checked'}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <button
+                      onClick={() => onSelect(w.address)}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-neutral-200 bg-white px-2.5 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50 transition-colors"
+                    >
+                      <Eye className="w-3.5 h-3.5" strokeWidth={1.75} />
+                      View
+                    </button>
+                    <button
+                      onClick={() => onRemove(w.address)}
+                      title="Stop tracking this wallet (history is kept)"
+                      className="inline-flex items-center justify-center rounded-lg border border-neutral-200 bg-white p-1.5 text-neutral-400 transition-colors hover:border-red-200 hover:text-red-600"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" strokeWidth={1.75} />
+                    </button>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+          {hiddenCount > 0 && !showAll && (
             <button
-              onClick={onChange}
+              onClick={() => setShowAll(true)}
               className="text-xs font-medium text-neutral-500 hover:text-neutral-900 transition-colors"
             >
-              Change wallet
+              Show all {sorted.length} wallets
             </button>
-          </div>
-        )}
+          )}
+        </>
+      )}
 
-        {!address && (
-          <>
-            {!apiKey && (
-              <>
-                <ApiKeyEntry onSaved={onKeySaved} />
-                <p className="mt-2 text-xs text-neutral-500">
-                  A key is optional. Without one, WalletXS still scans but only sees the last ~55
-                  days of approvals — add a key for full lifetime history.
-                </p>
-              </>
-            )}
-            <div className={apiKey ? '' : 'mt-6'}>
-              <AddressEntry onSubmit={onSubmit} />
-            </div>
-          </>
-        )}
-
-        {address && loading && (
-          <div className="rounded-xl border border-[#e5e5e7] bg-[#f5f5f6] px-6 py-20 text-center">
-            <div className="mx-auto w-6 h-6 border-2 border-neutral-200 border-t-neutral-800 rounded-full animate-spin" />
-            <p className="mt-4 text-sm text-neutral-500">
-              {apiKey
-                ? 'Reading lifetime approvals and blocklist data from Etherscan…'
-                : 'Reading approvals and blocklist data (limited ~55-day window)…'}
-            </p>
-          </div>
-        )}
-
-        {address && !loading && result && (
-          <>
-            <ScoreCard score={result.overall} lastCheck={lastCheck} />
-            <div className="mt-3">
-              <ScoreHistory history={scoreHistory} />
-            </div>
-            {limitedDepth && (
-              <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-800">
-                Limited scan depth (~55 days) — Approval staleness and Historical contract exposure
-                are based on the last ~55 days only. Add an Etherscan API key for full lifetime
-                history.
-              </div>
-            )}
-            <div className="mt-4">
-              <TipJar />
-            </div>
-            <SubScoreGrid subs={result.subs} />
-            <WhatChanged findings={findings} />
-            <PercentileLine score={result.overall} />
-          </>
-        )}
+      <div className="flex items-center gap-2">
+        <button
+          onClick={exportBackup}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-neutral-200 bg-white px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50 transition-colors"
+        >
+          <Download className="w-3.5 h-3.5" strokeWidth={1.75} />
+          Export
+        </button>
+        <button
+          onClick={() => fileRef.current?.click()}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-neutral-200 bg-white px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50 transition-colors"
+        >
+          <Upload className="w-3.5 h-3.5" strokeWidth={1.75} />
+          Import
+        </button>
+        <input
+          ref={fileRef}
+          type="file"
+          accept="application/json,.json"
+          onChange={handleImport}
+          className="hidden"
+        />
       </div>
+      {importMsg && (
+        <p
+          className={`text-xs ${importMsg.type === 'ok' ? 'text-emerald-600' : 'text-red-600'}`}
+        >
+          {importMsg.text}
+        </p>
+      )}
+
+      <AddressEntry onSubmit={onAdd} />
     </div>
   );
 }
 ```
 
-## src/pages/Methodology.jsx
+## src/components/walletxs/Footer.jsx
 
 ```jsx
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowLeft } from 'lucide-react';
-import { SAMPLE_SIZE, SAMPLE_UPDATED } from '@/lib/percentile';
+import { Github } from 'lucide-react';
+import { GITHUB_REPO_URL } from '@/lib/config';
 
-const Section = ({ title, children }) => (
-  <section className="mt-8">
-    <h2 className="text-sm font-semibold uppercase tracking-[0.14em] text-neutral-500">{title}</h2>
-    <div className="mt-2 space-y-3 text-sm leading-relaxed text-neutral-800">{children}</div>
-  </section>
-);
-
-export default function Methodology() {
+// Quiet, always-present footer. The only always-visible path to Methodology
+// and Privacy — PercentileLine only renders after a completed scan, so this
+// guarantees both pages (and the source link) are reachable in every state.
+export default function Footer() {
   return (
-    <div className="min-h-screen bg-[#fafafa]">
-      <div className="mx-auto max-w-2xl px-5 pb-24">
-        <Link
-          to="/"
-          className="inline-flex items-center gap-1.5 py-6 text-sm text-neutral-500 hover:text-neutral-900 transition-colors"
-        >
-          <ArrowLeft className="w-4 h-4" strokeWidth={1.75} /> Back
-        </Link>
+    <footer className="mt-16 flex flex-wrap items-center justify-center gap-x-4 gap-y-2 text-xs text-neutral-500">
+      <Link to="/methodology" className="hover:text-neutral-900 transition-colors">
+        Methodology
+      </Link>
+      <span className="text-neutral-300" aria-hidden="true">·</span>
+      <Link to="/privacy" className="hover:text-neutral-900 transition-colors">
+        Privacy
+      </Link>
+      <span className="text-neutral-300" aria-hidden="true">·</span>
+      <a
+        href={GITHUB_REPO_URL}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="inline-flex items-center gap-1 hover:text-neutral-900 transition-colors"
+      >
+        <Github className="w-3 h-3" strokeWidth={1.75} />
+        Source
+      </a>
+    </footer>
+  );
+}
+```
 
-        <h1 className="text-2xl font-semibold tracking-tight text-neutral-900">Methodology</h1>
+## src/components/walletxs/CopyMarkdownButton.jsx
 
-        <Section title="What is queried">
-          <p>
-            Approval history is fetched from the Etherscan API, in your browser, each time you run
-            a check. Etherscan indexes full lifetime event logs, so staleness and historical
-            exposure can see approvals years old — not just the last few weeks. Nothing is computed
-            on a server and no score is stored anywhere but your own browser.
-          </p>
-          <p>
-            The Etherscan key used by the app ships in the client bundle and is shared across all
-            users; it is a developer key, not a user credential, and is subject to Etherscan's rate
-            limits. You can also supply your own free key, which takes precedence. If no key is
-            configured or the Etherscan request fails, the app falls back to a keyless public-RPC
-            scan covering roughly the last 55 days, and the affected sub-scores are visibly marked
-            "Limited scan depth (~55 days)" so a partial scan is never shown as a complete one.
-          </p>
-          <p>
-            Contract addresses are cross-referenced against the ScamSniffer open scam-address
-            database, fetched from its public GitHub repository. That list is maintained by a third
-            party and we assume it refreshes on the order of days. We do not control when an address
-            is added, and a malicious contract may not be on it yet.
-          </p>
-          <p>
-            The wallet address is also screened against the OFAC SDN sanctions list (Ethereum
-            addresses), extracted and auto-updated nightly from the official U.S. Treasury list by
-            the open-source 0xB10C/ofac-sanctioned-digital-currency-addresses project. The entire
-            list is downloaded and matched in your browser — your address never leaves your device
-            for this check.
-          </p>
-        </Section>
+```jsx
+import React, { useState } from 'react';
+import { Copy, Check } from 'lucide-react';
+import { tier } from '@/lib/severity';
+import { SUB_SCORE_LABELS } from '@/lib/scoring';
+import { percentileFor, SAMPLE_SIZE } from '@/lib/percentile';
 
-        <Section title="What a high score does not mean">
-          <p>
-            A high score means nothing known-bad was found in the data we checked. It is not a
-            safety guarantee. A wallet can score 100 and still be exposed to a contract nobody has
-            flagged yet, to a risk outside approvals entirely, or to a compromise of your keys.
-          </p>
-        </Section>
+// Builds a Markdown string from the current score report, so it can be pasted
+// into any tool that accepts Markdown (Notion, Obsidian, a GitHub issue, …)
+// without this app integrating with any of them.
+function buildMarkdown({ address, result, findings }) {
+  const lines = [];
+  const overall = result.overall;
+  const overallTier = tier(overall);
 
-        <Section title="The percentile figure">
-          <p>
-            "Safer than X% of scanned wallets" is calculated against a static sample of{' '}
-            {SAMPLE_SIZE.toLocaleString()} public wallets bundled with the app, last updated{' '}
-            {SAMPLE_UPDATED}. It is not a live comparison against other users, and no other user's
-            score is ever sent anywhere.
-          </p>
-        </Section>
+  lines.push('# WalletXS Exposure Report');
+  lines.push('');
+  lines.push(`**Wallet:** \`${address}\``);
+  lines.push(
+    `**Overall score:** ${overall !== null ? `${overall} (${overallTier.label})` : 'Unavailable'}`
+  );
+  const pct = percentileFor(overall);
+  if (pct !== null) {
+    lines.push(`**Percentile:** safer than ${pct}% of ${SAMPLE_SIZE.toLocaleString()} sampled wallets`);
+  }
+  lines.push('');
 
-        <Section title="Unavailable sub-scores">
-          <p>
-            When a data source fails to load, that sub-score reads "Unavailable" and is excluded
-            from the overall score rather than filled with a placeholder number. If the OFAC list
-            can't be fetched (for example, blocked or offline), public exposure falls back to
-            Unavailable and the remaining sub-scores are re-weighted to compute the overall.
-          </p>
-        </Section>
+  lines.push('## Sub-scores');
+  lines.push('');
+  for (const key of Object.keys(SUB_SCORE_LABELS)) {
+    const s = result.subs?.[key];
+    const label = SUB_SCORE_LABELS[key];
+    if (!s || s.unavailable) {
+      lines.push(`- **${label}:** Unavailable`);
+    } else {
+      lines.push(`- **${label}:** ${s.score} (${tier(s.score).label})`);
+    }
+  }
+  lines.push('');
 
-        <Section title="Third-party privacy">
-          <p>
-            Your address is sent to Etherscan (when a key is configured) or to the public RPC
-            provider (in the limited-depth fallback), and requests are made to the blocklist host
-            in order to run a check. Those requests are subject to those third parties' own privacy
-            practices, not ours. We have no server and collect nothing.
-          </p>
-          <p>
-            Each scan also sends one anonymous increment ping to the audit-counter endpoint
-            (api.walletxs.com/count) so the header can show a live "audits run" total. The ping
-            carries no wallet address, no user id, and no identifying data — only an empty counter
-            increment. If it is blocked (ad-blocker or offline) the counter simply shows its
-            fallback value.
-          </p>
-        </Section>
-      </div>
-    </div>
+  if (findings && findings.length > 0) {
+    lines.push('## Current findings');
+    lines.push('');
+    for (const f of findings) lines.push(`- ${f.text}`);
+    lines.push('');
+  }
+
+  lines.push('---');
+  lines.push('');
+  const methodologyUrl = `${window.location.origin}/methodology`;
+  lines.push(
+    `_Generated by WalletXS on ${new Date().toLocaleString()} — not a safety guarantee. See ${methodologyUrl} for details._`
+  );
+  return lines.join('\n');
+}
+
+export default function CopyMarkdownButton({ address, result, findings }) {
+  const [copied, setCopied] = useState(false);
+
+  const copy = async () => {
+    const md = buildMarkdown({ address, result, findings });
+    try {
+      await navigator.clipboard.writeText(md);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      /* clipboard unavailable */
+    }
+  };
+
+  return (
+    <button
+      onClick={copy}
+      className="inline-flex items-center gap-1.5 rounded-lg border border-neutral-200 bg-white px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50 transition-colors"
+    >
+      {copied ? (
+        <Check className="w-3.5 h-3.5 text-emerald-600" strokeWidth={1.75} />
+      ) : (
+        <Copy className="w-3.5 h-3.5" strokeWidth={1.75} />
+      )}
+      {copied ? 'Copied' : 'Copy as Markdown'}
+    </button>
   );
 }
 ```
 
 ---
 
-## Dependencies
-
-WalletXS is a Vite + React + Tailwind app. Required npm packages:
-
-```
-react, react-dom, react-router-dom
-@tanstack/react-query
-framer-motion
-lucide-react
-tailwindcss, tailwindcss-animate
-class-variance-authority, clsx, tailwind-merge
-@radix-ui/react-dialog, @radix-ui/react-slot
-```
-
-### shadcn/ui primitives used
-
-These are standard [shadcn/ui](https://ui.shadcn.com) components and are not included in this bundle. Add them via the shadcn CLI so the imports below resolve:
-
-- `@/components/ui/button` → `Button`
-- `@/components/ui/input` → `Input`
-- `@/components/ui/dialog` → `Dialog`, `DialogContent`, `DialogHeader`, `DialogTitle`, `DialogDescription`, `DialogTrigger`
-- `@/components/ui/toaster` → `Toaster`
-
-### Platform glue (replace with your own or stub out)
-
-`src/App.jsx` imports a few platform wrappers that are outside WalletXS's logic. When porting to a plain Vite project, replace/stub these:
-
-- `@/lib/query-client` → export a `queryClientInstance` from `new QueryClient()`
-- `@/lib/AuthContext` → a no-op `AuthProvider` + `useAuth` returning `{ authError: null }`
-- `@/components/UserNotRegisteredError` → any fallback component
-- `./components/ScrollToTop` → a small component that scrolls to top on route change
-- `./lib/PageNotFound` → a 404 page
-
-### Path alias
-
-The `@/` alias maps to `src/`. In `vite.config.js`:
-
-```js
-resolve: { alias: { '@': path.resolve(__dirname, 'src') } }
-```
-
----
-
-_Edit `src/lib/config.js` (`DEV_TIP_ADDRESS`, `GITHUB_REPO_URL`, `KOFI_URL`, `ETHERSCAN_API_KEY`) before deploying._
+_Continued in **WalletXS-Source-Part3.md** (pages + dependencies)._
