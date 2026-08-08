@@ -947,7 +947,35 @@ const PRESETS = [5, 10, 25];
 const encAddr = (addr) => addr.replace(/^0x/, '').toLowerCase().padStart(64, '0');
 const encUint = (bn) => bn.toString(16).padStart(64, '0');
 const TRANSFER_SELECTOR = '0xa9059cbb';
-const toHexWei = (eth) => '0x' + BigInt(Math.round(eth * 1e18)).toString(16);
+
+// Convert a decimal ETH amount (number or string) to hex wei using BigInt
+// string math. The integer and fractional parts are parsed separately and
+// assembled as wei with BigInt — never multiplying a float by 1e18, which
+// overflows Number.MAX_SAFE_INTEGER above ~9 ETH and silently loses precision
+// (real wei, sent from the user's own wallet).
+const ethToWei = (eth) => {
+  // Normalize scientific-notation numbers (e.g. 1e-9) to a plain decimal string
+  // before splitting, so very small amounts parse correctly.
+  const str = typeof eth === 'number' ? eth.toFixed(18).replace(/\.?0+$/, '') : String(eth);
+  const [intPart = '', fracPart = ''] = str.split('.');
+  const intWei = BigInt(intPart || '0') * 10n ** 18n;
+  const f = fracPart.slice(0, 18); // truncate to wei precision
+  const fracWei = f ? BigInt(f) * 10n ** BigInt(18 - f.length) : 0n;
+  return '0x' + (intWei + fracWei).toString(16);
+};
+
+// USD → wei using integer math end to end. usdCents and priceCents are small
+// (cents, well within safe-integer range for any realistic tip), so the
+// BigInt product stays exact; integer division floors so the user never
+// overpays. With no price available, the USD value is sent as raw ETH.
+// Both branches return a hex string — eth_sendTransaction's `value` field
+// must be a hex-encoded string per EIP-1193, not a raw BigInt.
+const usdToWei = (usd, priceUsd) => {
+  const usdCents = BigInt(Math.round(usd * 100));
+  if (!priceUsd) return ethToWei(usd);
+  const priceCents = BigInt(Math.round(priceUsd * 100));
+  return '0x' + ((usdCents * 10n ** 18n) / priceCents).toString(16);
+};
 
 export default function TipJar() {
   const [open, setOpen] = useState(false);
@@ -994,10 +1022,10 @@ export default function TipJar() {
       const from = accounts[0];
       let txHash;
       if (asset === 'ETH') {
-        const ethAmount = ethPrice ? value / ethPrice : value;
+        const wei = usdToWei(value, ethPrice);
         txHash = await window.ethereum.request({
           method: 'eth_sendTransaction',
-          params: [{ from, to: DEV_TIP_ADDRESS, value: toHexWei(ethAmount) }],
+          params: [{ from, to: DEV_TIP_ADDRESS, value: wei }],
         });
       } else {
         const units = BigInt(Math.round(value * 1e6));
