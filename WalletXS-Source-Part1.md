@@ -1,8 +1,8 @@
-# WalletXS — GitHub Source Bundle (Part 1 of 2)
+# WalletXS — GitHub Source Bundle (Part 1 of 3)
 
 Full source for the **WalletXS** wallet-exposure-score app. 100% client-side and stateless: no backend, no database, no accounts, no cookies. All persistence lives in `localStorage` (mirrored to `IndexedDB` for service-worker access). The score is computed fresh in the browser on every check from public RPC + public blocklist data.
 
-> **Part 1** = config / build files / public assets / hooks / lib. **Part 2** = components + pages + dependencies. The only external dependencies are standard shadcn/ui primitives (`Button`, `Input`, `Dialog`) and the npm packages listed at the end of Part 2.
+> **Part 1** = config / build files / public assets / hooks / lib. **Part 2** = components. **Part 3** = pages + dependencies. The only external dependencies are standard shadcn/ui primitives (`Button`, `Input`, `Dialog`) and the npm packages listed at the end of Part 3.
 
 ## File structure
 
@@ -380,10 +380,18 @@ self.addEventListener('activate', (e) => {
   );
 });
 
-// Network-first for everything: dev stays fresh, offline falls back to cache.
+// Network-first for the app's own static shell only. Cross-origin GETs
+// (Etherscan, the RPC provider, ScamSniffer blocklist, OFAC list, CoinGecko)
+// must always hit the network live and be allowed to fail naturally — never
+// served from cache. Caching them would (a) mask stale data behind a cached
+// response on a live fetch failure, defeating the app's "Unavailable"
+// fallback, and (b) persist a local record of queried addresses (the Etherscan
+// URL carries the wallet address as a query param) in Cache Storage.
 self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET') return;
+  const url = new URL(req.url);
+  if (url.origin !== self.location.origin) return;
   e.respondWith(
     (async () => {
       try {
