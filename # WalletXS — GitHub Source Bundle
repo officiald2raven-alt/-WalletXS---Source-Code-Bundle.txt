@@ -1,0 +1,12 @@
+# WalletXS — GitHub Source Bundle
+
+Full source for the **WalletXS** wallet-exposure-score app. 100% client-side and stateless: no backend, no database, no accounts, no cookies. All persistence lives in `localStorage` (mirrored to `IndexedDB` for service-worker access). The score is computed fresh in the browser on every check from public RPC + public blocklist data.
+
+The source is split across two files (GitHub's paste limit):
+
+- **WalletXS-Source-Part1.md** — config / build files (`index.html`, `tailwind.config.js`) / public assets (`manifest.json`, `sw.js`, `icon.svg`) / `main.jsx` / `App.jsx` / `index.css` / hooks / `lib/`
+- **WalletXS-Source-Part2.md** — all `components/walletxs/*` + `pages/Home.jsx` + `pages/Methodology.jsx` + dependencies & setup notes
+
+Copy both into your repo (or into a single GitHub file/gist in order) to get the complete, up-to-date project — including the soft-blue Tip Jar button, pink heart, and your tip address `0x4b848Adb6BB9072C7Ef3513D52699AB569291bFf`.
+
+> The only external dependencies are standard shadcn/ui primitives (`Button`, `Input`, `Dialog`) and the npm packages listed at the end of Part 2. Edit `src/lib/config.js` before deploying.
