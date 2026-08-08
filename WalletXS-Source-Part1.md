@@ -28,6 +28,7 @@ WalletXS/
    │  ├─ chain.js
    │  ├─ storage.js
    │  ├─ syncdb.js
+   │  ├─ backup.js
    │  ├─ percentile.js
    │  ├─ percentileSample.json
    │  ├─ severity.js
@@ -65,51 +66,99 @@ WalletXS/
 ```js
 /** @type {import('tailwindcss').Config} */
 module.exports = {
-  darkMode: ["class"],
-  content: ["./index.html", "./src/**/*.{ts,tsx,js,jsx}"],
+    darkMode: ["class"],
+    content: ["./index.html", "./src/**/*.{ts,tsx,js,jsx}"],
   theme: {
-    extend: {
-      borderRadius: {
-        lg: 'var(--radius)',
-        md: 'calc(var(--radius) - 2px)',
-        sm: 'calc(var(--radius) - 4px)',
-      },
-      colors: {
-        background: 'hsl(var(--background))',
-        foreground: 'hsl(var(--foreground))',
-        card: { DEFAULT: 'hsl(var(--card))', foreground: 'hsl(var(--card-foreground))' },
-        popover: { DEFAULT: 'hsl(var(--popover))', foreground: 'hsl(var(--popover-foreground))' },
-        primary: { DEFAULT: 'hsl(var(--primary))', foreground: 'hsl(var(--primary-foreground))' },
-        secondary: { DEFAULT: 'hsl(var(--secondary))', foreground: 'hsl(var(--secondary-foreground))' },
-        muted: { DEFAULT: 'hsl(var(--muted))', foreground: 'hsl(var(--muted-foreground))' },
-        accent: { DEFAULT: 'hsl(var(--accent))', foreground: 'hsl(var(--accent-foreground))' },
-        destructive: { DEFAULT: 'hsl(var(--destructive))', foreground: 'hsl(var(--destructive-foreground))' },
-        border: 'hsl(var(--border))',
-        input: 'hsl(var(--input))',
-        ring: 'hsl(var(--ring))',
-        chart: {
-          '1': 'hsl(var(--chart-1))', '2': 'hsl(var(--chart-2))', '3': 'hsl(var(--chart-3))',
-          '4': 'hsl(var(--chart-4))', '5': 'hsl(var(--chart-5))',
-        },
-      },
-      fontFamily: {
-        heading: ['var(--font-heading)'],
-        body: ['var(--font-body)'],
-        display: ['var(--font-display)'],
-        mono: ['var(--font-mono)'],
-      },
-      keyframes: {
-        'accordion-down': { from: { height: '0' }, to: { height: 'var(--radix-accordion-content-height)' } },
-        'accordion-up': { from: { height: 'var(--radix-accordion-content-height)' }, to: { height: '0' } },
-      },
-      animation: {
-        'accordion-down': 'accordion-down 0.2s ease-out',
-        'accordion-up': 'accordion-up 0.2s ease-out',
-      },
-    },
+  	extend: {
+  		borderRadius: {
+  			lg: 'var(--radius)',
+  			md: 'calc(var(--radius) - 2px)',
+  			sm: 'calc(var(--radius) - 4px)'
+  		},
+  		colors: {
+  			background: 'hsl(var(--background))',
+  			foreground: 'hsl(var(--foreground))',
+  			card: {
+  				DEFAULT: 'hsl(var(--card))',
+  				foreground: 'hsl(var(--card-foreground))'
+  			},
+  			popover: {
+  				DEFAULT: 'hsl(var(--popover))',
+  				foreground: 'hsl(var(--popover-foreground))'
+  			},
+  			primary: {
+  				DEFAULT: 'hsl(var(--primary))',
+  				foreground: 'hsl(var(--primary-foreground))'
+  			},
+  			secondary: {
+  				DEFAULT: 'hsl(var(--secondary))',
+  				foreground: 'hsl(var(--secondary-foreground))'
+  			},
+  			muted: {
+  				DEFAULT: 'hsl(var(--muted))',
+  				foreground: 'hsl(var(--muted-foreground))'
+  			},
+  			accent: {
+  				DEFAULT: 'hsl(var(--accent))',
+  				foreground: 'hsl(var(--accent-foreground))'
+  			},
+  			destructive: {
+  				DEFAULT: 'hsl(var(--destructive))',
+  				foreground: 'hsl(var(--destructive-foreground))'
+  			},
+  			border: 'hsl(var(--border))',
+  			input: 'hsl(var(--input))',
+  			ring: 'hsl(var(--ring))',
+  			chart: {
+  				'1': 'hsl(var(--chart-1))',
+  				'2': 'hsl(var(--chart-2))',
+  				'3': 'hsl(var(--chart-3))',
+  				'4': 'hsl(var(--chart-4))',
+  				'5': 'hsl(var(--chart-5))'
+  			},
+  			sidebar: {
+  				DEFAULT: 'hsl(var(--sidebar-background))',
+  				foreground: 'hsl(var(--sidebar-foreground))',
+  				primary: 'hsl(var(--sidebar-primary))',
+  				'primary-foreground': 'hsl(var(--sidebar-primary-foreground))',
+  				accent: 'hsl(var(--sidebar-accent))',
+  				'accent-foreground': 'hsl(var(--sidebar-accent-foreground))',
+  				border: 'hsl(var(--sidebar-border))',
+  				ring: 'hsl(var(--sidebar-ring))'
+  			}
+  		},
+  		fontFamily: {
+  			heading: ['var(--font-heading)'],
+  			body: ['var(--font-body)'],
+  			display: ['var(--font-display)'],
+  			mono: ['var(--font-mono)']
+  		},
+  		keyframes: {
+  			'accordion-down': {
+  				from: {
+  					height: '0'
+  				},
+  				to: {
+  					height: 'var(--radix-accordion-content-height)'
+  				}
+  			},
+  			'accordion-up': {
+  				from: {
+  					height: 'var(--radix-accordion-content-height)'
+  				},
+  				to: {
+  					height: '0'
+  				}
+  			}
+  		},
+  		animation: {
+  			'accordion-down': 'accordion-down 0.2s ease-out',
+  			'accordion-up': 'accordion-up 0.2s ease-out'
+  		}
+  	}
   },
   plugins: [require("tailwindcss-animate")],
-};
+}
 ```
 
 ## public/manifest.json
@@ -466,6 +515,7 @@ import UserNotRegisteredError from '@/components/UserNotRegisteredError';
 import ScrollToTop from './components/ScrollToTop';
 import Home from './pages/Home';
 import Methodology from './pages/Methodology';
+import PrivacyPolicy from './pages/PrivacyPolicy';
 
 // WalletXS is fully public — zero accounts, ever. AuthProvider is a required
 // platform wrapper but is inert here: no loading gate on auth state and no
@@ -479,6 +529,7 @@ const AuthenticatedApp = () => {
     <Routes>
       <Route path="/" element={<Home />} />
       <Route path="/methodology" element={<Methodology />} />
+      <Route path="/privacy" element={<PrivacyPolicy />} />
       <Route path="*" element={<PageNotFound />} />
     </Routes>
   );
@@ -539,16 +590,75 @@ export default App
     --font-body: ui-sans-serif, system-ui, sans-serif;
     --font-display: ui-sans-serif, system-ui, sans-serif;
     --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    --sidebar-background: 0 0% 98%;
+    --sidebar-foreground: 240 5.3% 26.1%;
+    --sidebar-primary: 240 5.9% 10%;
+    --sidebar-primary-foreground: 0 0% 98%;
+    --sidebar-accent: 240 4.8% 95.9%;
+    --sidebar-accent-foreground: 240 5.9% 10%;
+    --sidebar-border: 220 13% 91%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+
+  .dark {
+    --background: 0 0% 3.9%;
+    --foreground: 0 0% 98%;
+    --card: 0 0% 3.9%;
+    --card-foreground: 0 0% 98%;
+    --popover: 0 0% 3.9%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 0 0% 98%;
+    --primary-foreground: 0 0% 9%;
+    --secondary: 0 0% 14.9%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 0 0% 14.9%;
+    --muted-foreground: 0 0% 63.9%;
+    --accent: 0 0% 14.9%;
+    --accent-foreground: 0 0% 98%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 0 0% 14.9%;
+    --input: 0 0% 14.9%;
+    --ring: 0 0% 83.1%;
+    --chart-1: 220 70% 50%;
+    --chart-2: 160 60% 45%;
+    --chart-3: 30 80% 55%;
+    --chart-4: 280 65% 60%;
+    --chart-5: 340 75% 55%;
+    --sidebar-background: 240 5.9% 10%;
+    --sidebar-foreground: 240 4.8% 95.9%;
+    --sidebar-primary: 224.3 76.3% 48%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 240 3.7% 15.9%;
+    --sidebar-accent-foreground: 240 4.8% 95.9%;
+    --sidebar-border: 240 3.7% 15.9%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
   }
 }
+
+
 
 @layer base {
   * {
     @apply border-border outline-ring/50;
   }
+
   body {
     @apply bg-background text-foreground font-body;
   }
+}
+
+/* Print / export stylesheet — hides interactive chrome, keeps the report. */
+.print-only { display: none; }
+
+@media print {
+  body { background: #ffffff !important; }
+  .no-print { display: none !important; }
+  .print-only { display: block !important; }
+  /* Hide all interactive buttons in the print output. */
+  button { display: none !important; }
+  /* Keep the report's colors (score tiers, borders) in the printout. */
+  * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
 ```
 
@@ -1281,42 +1391,126 @@ export async function lookupPublicExposure(address) {
 
 ```js
 // All WalletXS persistence lives in localStorage. No backend, no accounts.
-// The address + API key are also mirrored to IndexedDB so the service worker
-// can read them during a Periodic Background Sync (SWs can't access localStorage).
+// The active address + API key are also mirrored to IndexedDB so the service
+// worker can read them during a Periodic Background Sync (SWs can't access
+// localStorage).
 
 import { syncSetAddress, syncSetApiKey, syncClearAddress, syncClearApiKey } from '@/lib/syncdb';
 
-const ADDRESS_KEY = 'walletxs.address';
+const ADDRESS_KEY = 'walletxs.address'; // legacy single-address key (migrated away)
+const TRACKED_KEY = 'walletxs.trackedAddresses'; // array of { address, label, addedAt }
+const ACTIVE_KEY = 'walletxs.activeAddress'; // which tracked wallet is currently viewed
 const HISTORY_KEY = 'walletxs.history';
 const APIKEY_KEY = 'walletxs.etherscanKey';
 
-export function loadAddress() {
+const PER_ADDRESS_HISTORY = 50;
+
+function readJSON(key, fallback) {
   try {
-    return localStorage.getItem(ADDRESS_KEY);
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeJSON(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    /* storage unavailable */
+  }
+}
+
+// --- One-time migration from the legacy single-address key -----------------
+// An existing user with the old 'walletxs.address' key and no tracked list
+// gets folded into the new multi-wallet model transparently: their address
+// becomes the first tracked wallet and the active one, then the old key is
+// dropped. History is keyed per-address already, so it carries over untouched.
+// Idempotent: once a tracked list exists (even an empty []), this never re-runs.
+let migrated = false;
+function migrateLegacyAddress() {
+  if (migrated) return;
+  migrated = true;
+  let legacy = null;
+  try {
+    legacy = localStorage.getItem(ADDRESS_KEY);
+  } catch {
+    legacy = null;
+  }
+  if (!legacy) return;
+  const tracked = readJSON(TRACKED_KEY, null);
+  if (tracked === null) {
+    // No tracked list yet — seed it with the legacy address.
+    writeJSON(TRACKED_KEY, [{ address: legacy.toLowerCase(), label: null, addedAt: Date.now() }]);
+    try {
+      localStorage.setItem(ACTIVE_KEY, legacy.toLowerCase());
+    } catch {
+      /* noop */
+    }
+    syncSetAddress(legacy.toLowerCase());
+  }
+  // The legacy key is obsolete in either branch.
+  try {
+    localStorage.removeItem(ADDRESS_KEY);
+  } catch {
+    /* noop */
+  }
+}
+
+// --- Tracked wallet list ---------------------------------------------------
+export function loadTrackedAddresses() {
+  migrateLegacyAddress();
+  return readJSON(TRACKED_KEY, []);
+}
+
+export function addTrackedAddress(address, label = null) {
+  const lower = address.toLowerCase();
+  const list = loadTrackedAddresses();
+  if (list.some((w) => w.address === lower)) return; // already tracked — no-op
+  list.push({ address: lower, label, addedAt: Date.now() });
+  writeJSON(TRACKED_KEY, list);
+}
+
+export function removeTrackedAddress(address) {
+  const lower = address.toLowerCase();
+  const list = loadTrackedAddresses().filter((w) => w.address !== lower);
+  writeJSON(TRACKED_KEY, list);
+  // NOTE: history is intentionally NOT deleted here — re-adding the same
+  // address later restores its prior score history.
+}
+
+// --- Active (currently-viewed) wallet --------------------------------------
+export function loadActiveAddress() {
+  migrateLegacyAddress();
+  try {
+    return localStorage.getItem(ACTIVE_KEY);
   } catch {
     return null;
   }
 }
 
-export function saveAddress(address) {
+export function saveActiveAddress(address) {
+  const lower = address.toLowerCase();
   try {
-    localStorage.setItem(ADDRESS_KEY, address);
+    localStorage.setItem(ACTIVE_KEY, lower);
   } catch {
-    /* storage unavailable */
+    /* noop */
   }
-  syncSetAddress(address);
+  // Mirror to IndexedDB so the service worker can read it for background checks.
+  syncSetAddress(lower);
 }
 
-export function clearAddress() {
+export function clearActiveAddress() {
   try {
-    localStorage.removeItem(ADDRESS_KEY);
-    localStorage.removeItem(HISTORY_KEY);
+    localStorage.removeItem(ACTIVE_KEY);
   } catch {
     /* noop */
   }
   syncClearAddress();
 }
 
+// --- API key ---------------------------------------------------------------
 export function loadApiKey() {
   try {
     return localStorage.getItem(APIKEY_KEY);
@@ -1343,12 +1537,9 @@ export function clearApiKey() {
   syncClearApiKey();
 }
 
+// --- Per-address score history --------------------------------------------
 function readHistory() {
-  try {
-    return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');
-  } catch {
-    return [];
-  }
+  return readJSON(HISTORY_KEY, []);
 }
 
 /** The most recent stored check for this address, before the current one. */
@@ -1366,13 +1557,22 @@ export function historyFor(address, limit = 10) {
 
 export function recordCheck(address, score, findings) {
   if (score === null || score === undefined) return;
+  const lower = address.toLowerCase();
   const history = readHistory();
-  history.push({ address: address.toLowerCase(), score, findings: findings || [], at: Date.now() });
-  try {
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(-50)));
-  } catch {
-    /* noop */
+  history.push({ address: lower, score, findings: findings || [], at: Date.now() });
+  // Cap PER ADDRESS so a frequently-checked wallet can't evict another
+  // wallet's history from this shared array. Group by address, keep the
+  // newest PER_ADDRESS_HISTORY entries for each, then flatten back to one array.
+  const byAddr = new Map();
+  for (const e of history) {
+    if (!byAddr.has(e.address)) byAddr.set(e.address, []);
+    byAddr.get(e.address).push(e);
   }
+  const trimmed = [];
+  for (const entries of byAddr.values()) {
+    trimmed.push(...entries.slice(-PER_ADDRESS_HISTORY));
+  }
+  writeJSON(HISTORY_KEY, trimmed);
 }
 ```
 
@@ -1430,6 +1630,75 @@ export const syncSetAddress = (addr) => setKV('address', addr);
 export const syncSetApiKey = (key) => setKV('apiKey', key);
 export const syncClearAddress = () => Promise.all([delKV('address'), delKV('lastSig')]);
 export const syncClearApiKey = () => delKV('apiKey');
+```
+
+## src/lib/backup.js
+
+```js
+// Client-side backup of the tracked-wallet list. No backend, no library —
+// just the native Blob/File APIs. Export downloads the current list as JSON;
+// import reads a JSON file back in, validates each entry is a 0x address,
+// and adds the valid ones via addTrackedAddress (which no-ops on duplicates).
+
+import { loadTrackedAddresses, addTrackedAddress } from '@/lib/storage';
+
+const isAddress = (v) => typeof v === 'string' && /^0x[a-fA-F0-9]{40}$/.test(v);
+
+export function exportBackup() {
+  const list = loadTrackedAddresses();
+  const blob = new Blob([JSON.stringify(list, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'walletxs-backup.json';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// Reads a JSON file and adds every valid wallet entry. Returns
+// { added, duplicate, invalid } on success, or throws with a plain-language
+// message the caller can show directly (never silently fails).
+export async function importBackup(file) {
+  const text = await file.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error("Couldn't parse the file as JSON.");
+  }
+  if (!Array.isArray(data)) {
+    throw new Error('Backup file must be a list of wallets.');
+  }
+
+  const existing = new Set(loadTrackedAddresses().map((w) => w.address));
+  let added = 0;
+  let duplicate = 0;
+  let invalid = 0;
+  for (const item of data) {
+    if (!item || typeof item !== 'object' || !isAddress(item.address)) {
+      invalid += 1;
+      continue;
+    }
+    const addr = item.address.toLowerCase();
+    if (existing.has(addr)) {
+      duplicate += 1;
+      continue;
+    }
+    addTrackedAddress(addr);
+    existing.add(addr);
+    added += 1;
+  }
+
+  if (added === 0) {
+    const reasons = [];
+    if (duplicate) reasons.push(`${duplicate} already tracked`);
+    if (invalid) reasons.push(`${invalid} invalid`);
+    throw new Error(`No new wallets imported (${reasons.join(', ') || 'empty list'}).`);
+  }
+  return { added, duplicate, invalid };
+}
 ```
 
 ## src/lib/percentile.js
@@ -1586,4 +1855,4 @@ export function notifyScoreChange(addr, prevScore, score) {
 
 ---
 
-_Continued in **WalletXS-Source-Part2.md** (components + pages + dependencies)._
+_Continued in **WalletXS-Source-Part2.md** (components) and **WalletXS-Source-Part3.md** (pages + dependencies)._
