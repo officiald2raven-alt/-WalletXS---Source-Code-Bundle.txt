@@ -511,6 +511,79 @@ export default function WhatChanged({ findings }) {
 }
 ```
 
+## src/components/walletxs/ApprovalBreakdown.jsx
+
+```jsx
+import React, { useState } from 'react';
+import { ExternalLink, ChevronDown, ChevronUp } from 'lucide-react';
+import { shortAddr } from '@/lib/severity';
+
+// Power-user drill-down: every active approval ranked by the points the
+// wallet would gain if that approval were revoked — not just the risky ones
+// already shown in "What changed". Collapsed by default so the main score
+// view stays uncluttered. Reuses the same Revoke.cash deep link WhatChanged
+// uses. The parent sorts by gain; entries with a 0/null gain simply omit the
+// point-gain line rather than show a misleading "+0".
+export default function ApprovalBreakdown({ breakdown, owner }) {
+  const [open, setOpen] = useState(false);
+  if (!breakdown || breakdown.length === 0) return null;
+
+  return (
+    <section className="mt-6">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="inline-flex items-center gap-1.5 text-sm font-medium text-neutral-600 hover:text-neutral-900 transition-colors"
+      >
+        {open ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+        {open ? 'Hide approval breakdown' : `See all ${breakdown.length} approvals and their impact`}
+      </button>
+
+      {open && (
+        <div className="mt-3 space-y-2">
+          {breakdown.map((a) => {
+            const hasGain = a.gain != null && a.gain > 0;
+            return (
+              <div
+                key={a.key}
+                className="flex flex-col gap-2 rounded-lg border border-[#e5e5e7] bg-[#f5f5f6] px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
+              >
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-mono text-sm text-neutral-900">{shortAddr(a.spender)}</span>
+                    {a.unlimited && (
+                      <span className="rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-700">
+                        Unlimited
+                      </span>
+                    )}
+                    {a.flagged && (
+                      <span className="rounded border border-red-200 bg-red-50 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-red-700">
+                        Flagged
+                      </span>
+                    )}
+                  </div>
+                  {hasGain && (
+                    <p className="mt-1 text-xs text-emerald-700">+{a.gain} pts if revoked</p>
+                  )}
+                </div>
+                <a
+                  href={`https://revoke.cash/address/${owner}?chainId=1`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex shrink-0 items-center gap-1.5 self-start rounded-lg border border-neutral-200 bg-white px-2.5 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50 transition-colors"
+                >
+                  Revoke
+                  <ExternalLink className="w-3 h-3" strokeWidth={1.75} />
+                </a>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
+```
+
 ## src/components/walletxs/PercentileLine.jsx
 
 ```jsx
