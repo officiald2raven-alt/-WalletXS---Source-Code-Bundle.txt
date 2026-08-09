@@ -881,6 +881,14 @@ export const WALLETXS_LOGO_URL = 'https://media.base44.com/images/public/6a75d38
 // fall back to a keyless public-RPC scan (~55 days of history).
 export const ETHERSCAN_API_KEY = '';
 
+// OPTIONAL developer GoPlus Security API key. GoPlus's core endpoints
+// (Malicious Address API, Token Security API) work without a key for
+// standard usage, but a free key from https://console.gopluslabs.io
+// raises rate limits. Ships in the client bundle — a developer key,
+// not a user credential, no backend required. Leave empty to use
+// GoPlus's keyless free tier.
+export const GOPLUS_API_KEY = '';
+
 // USDC contract on Ethereum mainnet (6 decimals).
 export const USDC_CONTRACT = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48';
 
@@ -923,6 +931,16 @@ export const SUB_SCORE_LABELS = {
 
 const clamp = (n) => Math.max(0, Math.min(100, Math.round(n)));
 
+// Builds the "flagged by X" attribution suffix for a finding, naming every
+// source that actually flagged the address so a user or reviewer can trace a
+// finding back to the real data source behind it.
+export const sourceLabel = (scamsniffer, goplus) => {
+  const srcs = [];
+  if (scamsniffer) srcs.push('ScamSniffer');
+  if (goplus) srcs.push('GoPlus Security');
+  return srcs.length ? `flagged by ${srcs.join(' and ')}` : 'flagged';
+};
+
 export function categoryFor(score) {
   if (score === null || score === undefined) return null;
   if (score >= 80) return 'Strong';
@@ -957,10 +975,10 @@ export function scoreApprovalExposure({ approvals, blocklistAvailable }) {
 
     if (a.unlimited && a.flagged) {
       score -= 45;
-      reasons.push(`Unlimited approval to flagged contract ${a.spender}.`);
+      reasons.push(`Unlimited approval to ${a.spender} (${sourceLabel(a.flaggedScamsniffer, a.flaggedGoplus)}).`);
     } else if (a.flagged) {
       score -= 20;
-      reasons.push(`Capped approval to flagged contract ${a.spender}.`);
+      reasons.push(`Capped approval to ${a.spender} (${sourceLabel(a.flaggedScamsniffer, a.flaggedGoplus)}).`);
     } else if (a.unlimited) {
       score -= 12;
     } else {
@@ -1040,7 +1058,7 @@ export function scoreHistoricalExposure({ interactedContracts, flaggedContracts,
 
   for (const c of hits) {
     score -= 22;
-    reasons.push(`Address has interacted with blocklisted contract ${c}.`);
+    reasons.push(`Address has interacted with contract ${c.address} (${sourceLabel(c.scamsniffer, c.goplus)}).`);
   }
 
   if (hits.length === 0) {
@@ -1133,17 +1151,37 @@ export function counterfactualGain(inputs, approvalKey) {
  * windowed scan (~55 days) and flag the result limitedDepth=true so the UI can
  * warn the user instead of silently presenting a partial scan as complete.
  *
- * BLOCKLIST: ScamSniffer's open scam-address database. On fetch failure →
- * unavailable, never guess.
+ * BLOCKLIST: ScamSniffer's open scam-address database, cross-referenced with
+ * the GoPlus Security Malicious Address API (a second, independent source).
+ * On fetch failure → unavailable, never guess; if one source is down the
+ * check runs on whichever is available.
  */
 
 import { UNLIMITED_THRESHOLD } from '@/lib/scoring';
-import { ETHERSCAN_API_KEY } from '@/lib/config';
+import { ETHERSCAN_API_KEY, GOPLUS_API_KEY } from '@/lib/config';
 
 const ETHERSCAN_BASE = 'https://api.etherscan.io/v2/api';
 const RPC_URL = 'https://eth.llamarpc.com';
 const BLOCKLIST_URL =
   'https://raw.githubusercontent.com/scamsniffer/scam-database/main/blacklist/address.json';
+const GOPLUS_BASE = 'https://api.gopluslabs.io/api/v1/address_security';
+
+// GoPlus Address Security response fields that indicate a malicious address.
+// Any "1" among these means GoPlus flags the address.
+const GOPLUS_MALICIOUS_FIELDS = [
+  'malicious_address',
+  'honeypot_related_address',
+  'phishing_activities',
+  'blackmail_activities',
+  'stealing_attack',
+  'fake_kyc',
+  'malicious_mining_activities',
+  'darkweb_transactions',
+  'cybercrime',
+  'money_laundering',
+  'financial_crime',
+  'blacklist_doubt',
+];
 
 // Approval(address indexed owner, address indexed spender, uint256 value)
 const TOPIC_APPROVAL = '0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925';
@@ -1165,6 +1203,52 @@ export async function fetchBlocklist() {
     return new Set(arr.map((a) => String(a).toLowerCase()));
   } catch {
     return null; // unavailable — callers must not fabricate
+  }
+}
+
+/**
+ * GoPlus Security Malicious Address API — a second, independent malicious-
+ * address source alongside ScamSniffer. Takes the same contract addresses
+ * already checked against the blocklist and returns the subset GoPlus flags,
+ * or null when the service is unreachable (same "unavailable, never fabricate"
+ * contract as fetchBlocklist). Core endpoints work without a key; an optional
+ * developer key (GOPLUS_API_KEY) raises rate limits and is sent as a Bearer
+ * header per GoPlus's documented auth scheme.
+ */
+export async function fetchGoPlusMaliciousAddresses(addresses) {
+  const unique = [...new Set((addresses || []).map((a) => String(a).toLowerCase()))].filter(Boolean);
+  if (unique.length === 0) return new Set();
+  const checkOne = async (addr) => {
+    try {
+      const headers = { accept: '*/*' };
+      if (GOPLUS_API_KEY) headers.authorization = `Bearer ${GOPLUS_API_KEY}`;
+      const res = await fetch(`${GOPLUS_BASE}/${addr}?chain_id=1`, { headers });
+      if (!res.ok) return null; // request failed
+      const json = await res.json();
+      return { ok: true, result: json?.result };
+    } catch {
+      return null;
+    }
+  };
+  try {
+    const results = await Promise.all(unique.map(checkOne));
+    // If no request succeeded at all, the service is unavailable.
+    if (results.every((r) => r === null)) return null;
+    const flagged = new Set();
+    results.forEach((r, i) => {
+      if (!r || !r.result) return;
+      const obj = Array.isArray(r.result) ? r.result[0] : r.result;
+      if (!obj || typeof obj !== 'object') return;
+      for (const field of GOPLUS_MALICIOUS_FIELDS) {
+        if (String(obj[field]) === '1') {
+          flagged.add(unique[i]);
+          break;
+        }
+      }
+    });
+    return flagged;
+  } catch {
+    return null;
   }
 }
 
@@ -1251,9 +1335,13 @@ function normLog(log, ts) {
 
 /**
  * Reads live approval state for an address and cross-references the blocklist.
- * Returns { approvals, interactedContracts, flaggedContracts, blocklistAvailable, limitedDepth }.
- * limitedDepth is true when the scan fell back to the keyless RPC window
- * (~55 days) — the UI must surface this, never silently treat it as complete.
+ * Returns { approvals, interactedContracts, flaggedContracts, blocklistAvailable,
+ *   goplusAvailable, limitedDepth }. `blocklistAvailable` is ScamSniffer's
+ * availability and `goplusAvailable` is GoPlus's; an address counts as flagged
+ * if EITHER source flags it, and the combined check is only fully
+ * unavailable when BOTH are down. limitedDepth is true when the scan fell
+ * back to the keyless RPC window (~55 days) — the UI must surface this,
+ * never silently treat it as complete.
  */
 export async function collectWalletData(address, apiKey) {
   const blocklist = await fetchBlocklist();
@@ -1293,6 +1381,7 @@ export async function collectWalletData(address, apiKey) {
         interactedContracts: null,
         flaggedContracts: null,
         blocklistAvailable,
+        goplusAvailable: false,
         limitedDepth,
       };
     }
@@ -1314,6 +1403,27 @@ export async function collectWalletData(address, apiKey) {
     if (!prev || log.bn > prev.bn) byPair.set(key, { log, token, spender, key, ts: log.ts });
   }
 
+  // Distinct contracts the wallet has interacted with (token contracts +
+  // approval spenders). Used for the historical-exposure check and as part
+  // of the address set queried against GoPlus.
+  const interactedContracts = [
+    ...new Set(logs.flatMap((l) => [l.address.toLowerCase(), addrFromTopic(l.topics[2] || '')])),
+  ].filter(Boolean);
+
+  // GoPlus Security: a second, independent malicious-address source alongside
+  // ScamSniffer. Queried for the same addresses already checked against the
+  // blocklist — both the active approval spenders and every interacted
+  // contract. Returns null when unreachable, so the check falls back to
+  // ScamSniffer only rather than blanking the whole result.
+  const goplusAddresses = [
+    ...new Set([...[...byPair.values()].map((e) => e.spender), ...interactedContracts]),
+  ];
+  const goplus = await fetchGoPlusMaliciousAddresses(goplusAddresses);
+  const goplusAvailable = goplus !== null;
+
+  const isFlaggedScamsniffer = (addr) => blocklistAvailable && blocklist.has(addr);
+  const isFlaggedGoplus = (addr) => goplusAvailable && goplus.has(addr);
+
   const approvals = [];
   for (const entry of byPair.values()) {
     const isForAll = entry.log.topics[0] === TOPIC_APPROVAL_FOR_ALL;
@@ -1334,26 +1444,36 @@ export async function collectWalletData(address, apiKey) {
     }
     if (!active) continue;
 
+    const flaggedScamsniffer = isFlaggedScamsniffer(entry.spender);
+    const flaggedGoplus = isFlaggedGoplus(entry.spender);
     approvals.push({
       key: entry.key,
       token: entry.token,
       spender: entry.spender,
       unlimited: isForAll || value >= UNLIMITED_THRESHOLD,
-      flagged: blocklistAvailable && blocklist.has(entry.spender),
+      flagged: flaggedScamsniffer || flaggedGoplus,
+      flaggedScamsniffer,
+      flaggedGoplus,
       lastActivityAt: entry.ts ?? null,
       grantedAt: firstSeen.get(entry.key)?.ts ?? null,
     });
   }
 
-  const interactedContracts = [
-    ...new Set(logs.flatMap((l) => [l.address.toLowerCase(), addrFromTopic(l.topics[2] || '')])),
-  ].filter(Boolean);
+  // Historical exposure: interacted contracts flagged by EITHER source.
+  // Each entry carries its own source attribution so findings can name the
+  // real data source behind them. null only when BOTH sources are down.
+  let flaggedContracts = null;
+  if (blocklistAvailable || goplusAvailable) {
+    flaggedContracts = interactedContracts
+      .map((c) => ({
+        address: c,
+        scamsniffer: isFlaggedScamsniffer(c),
+        goplus: isFlaggedGoplus(c),
+      }))
+      .filter((c) => c.scamsniffer || c.goplus);
+  }
 
-  const flaggedContracts = blocklistAvailable
-    ? interactedContracts.filter((c) => blocklist.has(c))
-    : null;
-
-  return { approvals, interactedContracts, flaggedContracts, blocklistAvailable, limitedDepth };
+  return { approvals, interactedContracts, flaggedContracts, blocklistAvailable, goplusAvailable, limitedDepth };
 }
 
 /**
