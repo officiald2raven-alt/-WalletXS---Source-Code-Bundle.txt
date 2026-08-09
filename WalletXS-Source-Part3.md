@@ -17,7 +17,7 @@ import SubScoreGrid from '@/components/walletxs/SubScoreGrid';
 import WhatChanged from '@/components/walletxs/WhatChanged';
 import PercentileLine from '@/components/walletxs/PercentileLine';
 import ScoreHistory from '@/components/walletxs/ScoreHistory';
-import { computeScore, counterfactualGain } from '@/lib/scoring';
+import { computeScore, counterfactualGain, sourceLabel } from '@/lib/scoring';
 import { collectWalletData, lookupPublicExposure } from '@/lib/chain';
 import {
   loadTrackedAddresses,
@@ -41,6 +41,7 @@ import LiveMetricsBanner from '@/components/walletxs/LiveMetricsBanner';
 import TipJar from '@/components/walletxs/TipJar';
 import Footer from '@/components/walletxs/Footer';
 import CopyMarkdownButton from '@/components/walletxs/CopyMarkdownButton';
+import ApprovalBreakdown from '@/components/walletxs/ApprovalBreakdown';
 
 export default function Home() {
   const [tracked, setTracked] = useState(() => loadTrackedAddresses());
@@ -51,6 +52,7 @@ export default function Home() {
   const [result, setResult] = useState(null);
   const [lastCheck, setLastCheck] = useState(null);
   const [findings, setFindings] = useState([]);
+  const [approvalBreakdown, setApprovalBreakdown] = useState([]);
   const [limitedDepth, setLimitedDepth] = useState(false);
   const [scoreHistory, setScoreHistory] = useState([]);
   const { totalAudits, available, increment: incrementMetrics } = useLiveMetrics();
@@ -76,10 +78,24 @@ export default function Home() {
       const data = await collectWalletData(addr, key);
       setLimitedDepth(!!data.limitedDepth);
       const osintMatches = await lookupPublicExposure(addr);
-      const inputs = { ...data, osintMatches, now: Date.now() };
+      // Scoring gates on `blocklistAvailable`; treat it as the COMBINED
+      // malicious-address check (ScamSniffer OR GoPlus) so one source
+      // failing doesn't blank the sub-score when the other is still up.
+      const inputs = {
+        ...data,
+        blocklistAvailable: data.blocklistAvailable || data.goplusAvailable,
+        osintMatches,
+        now: Date.now(),
+      };
       const scored = computeScore(inputs);
 
-      // Current risky-approval findings for this check.
+      // Sort findings by point-impact (biggest win first). Null or
+      // non-positive gains sort to the end rather than break the sort.
+      const gainRank = (g) => (g == null || g <= 0 ? -Infinity : g);
+      const byGainDesc = (a, b) => gainRank(b.gain) - gainRank(a.gain);
+
+      // Current risky-approval findings for this check, attributed to the
+      // real source(s) that flagged each contract.
       const currentFindings = (data.approvals || [])
         .filter((a) => a.flagged || a.unlimited)
         .map((a) => ({
@@ -88,15 +104,33 @@ export default function Home() {
           spender: a.spender,
           gain: counterfactualGain(inputs, a.key),
           text: a.flagged
-            ? `Contract ${a.spender} is on a phishing blocklist. You have ${
-                a.unlimited ? 'an unlimited' : 'an active'
-              } approval to it.`
+            ? `Contract ${a.spender} is flagged by ${sourceLabel(
+                a.flaggedScamsniffer,
+                a.flaggedGoplus
+              )}. You have ${a.unlimited ? 'an unlimited' : 'an active'} approval to it.`
             : `You have an unlimited approval to ${a.spender}, which can move that token from your wallet at any time.`,
-        }));
+        }))
+        .sort(byGainDesc);
 
       // Real diff: only findings whose approval key was NOT present last check.
       const prevKeys = new Set((previous?.findings || []).map((f) => f.id));
       const newFindings = currentFindings.filter((f) => !prevKeys.has(f.id));
+
+      // Full ranked breakdown of EVERY active approval (not just the risky
+      // ones), so smaller unflagged capped approvals that still drag the
+      // score are visible. Reuses counterfactualGain on already-fetched
+      // data — no new network calls.
+      const fullBreakdown = (data.approvals || [])
+        .map((a) => ({
+          key: a.key,
+          spender: a.spender,
+          token: a.token,
+          unlimited: a.unlimited,
+          flagged: a.flagged,
+          gain: counterfactualGain(inputs, a.key),
+        }))
+        .sort(byGainDesc);
+      setApprovalBreakdown(fullBreakdown);
 
       const dropped = previous && scored.overall !== null && scored.overall < previous.score;
       if (dropped) {
@@ -194,6 +228,7 @@ export default function Home() {
       setActiveAddress(null);
       setResult(null);
       setFindings([]);
+      setApprovalBreakdown([]);
       setLimitedDepth(false);
       setScoreHistory([]);
     }
@@ -215,6 +250,7 @@ export default function Home() {
       setShowWalletList(false);
       setResult(null);
       setFindings([]);
+      setApprovalBreakdown([]);
       setLimitedDepth(false);
       setScoreHistory([]);
     }
@@ -230,6 +266,7 @@ export default function Home() {
     setApiKey(null);
     setResult(null);
     setFindings([]);
+    setApprovalBreakdown([]);
   };
 
   return (
@@ -327,6 +364,7 @@ export default function Home() {
                 </div>
                 <SubScoreGrid subs={result.subs} />
                 <WhatChanged findings={findings} />
+                <ApprovalBreakdown breakdown={approvalBreakdown} owner={activeAddress} />
                 <PercentileLine score={result.overall} />
                 <div className="print-only" aria-hidden="true">
                   <div ref={tsRef} className="mt-8 border-t border-neutral-300 pt-3 text-xs text-neutral-500">
@@ -408,6 +446,18 @@ export default function Methodology() {
             is added, and a malicious contract may not be on it yet.
           </p>
           <p>
+            Contract addresses are also checked against the GoPlus Security Malicious Address API,
+            a second, independent malicious-address source. For each contract address already being
+            checked against ScamSniffer (both active approval spenders and every contract the
+            wallet has interacted with), the app asks GoPlus whether it considers that address
+            malicious. An address counts as flagged if EITHER source flags it, so the two catch
+            more than either could alone. If one source is unreachable, the check still runs on
+            whichever is available — it is only marked "Unavailable" when both fail. GoPlus's core
+            endpoints work without a key; an optional developer key raises rate limits. The request
+            sends only the contract address being checked, never your wallet address, and is
+            subject to GoPlus's own privacy practices, not this app's.
+          </p>
+          <p>
             The wallet address is also screened against the OFAC SDN sanctions list (Ethereum
             addresses), extracted and auto-updated nightly from the official U.S. Treasury list by
             the open-source 0xB10C/ofac-sanctioned-digital-currency-addresses project. The entire
@@ -452,9 +502,11 @@ export default function Methodology() {
         <Section title="Third-party privacy">
           <p>
             Your address is sent to Etherscan (when a key is configured) or to the public RPC
-            provider (in the limited-depth fallback), and requests are made to the blocklist host
-            in order to run a check. Those requests are subject to those third parties' own privacy
-            practices, not ours. We have no server and collect nothing.
+            provider (in the limited-depth fallback), and requests are made to the ScamSniffer
+            blocklist host and to the GoPlus Security API in order to run a check. For GoPlus, only
+            the contract address being checked is sent — never your wallet address. Those requests
+            are subject to those third parties' own privacy practices, not ours. We have no server
+            and collect nothing.
           </p>
           <p>
             Each scan also sends one anonymous increment ping to the audit-counter endpoint
@@ -564,6 +616,12 @@ export default function PrivacyPolicy() {
             <li>
               The ScamSniffer open scam-address blocklist — downloaded from its public GitHub
               repository so contract addresses can be checked against it.
+            </li>
+            <li>
+              The GoPlus Security Malicious Address API — queried for each contract address already
+              being checked against the ScamSniffer blocklist (active approval spenders and
+              interacted contracts). Only the contract address being checked is sent, never your
+              wallet address. Subject to GoPlus's own privacy practices, not WalletXS's.
             </li>
             <li>
               The OFAC SDN sanctions list (Ethereum addresses) — downloaded in full and matched
